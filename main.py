@@ -1,33 +1,60 @@
-import json 
-import cv2 
+import json
+import time
+import cv2
 import numpy as np 
 import tensorflow as tf 
+
+from window_controller import open_apple
 
 with open("apple-model/metadata.json") as f: 
     LABELS = json.load(f)["labels"]
 
 model = tf.keras.models.load_model("keras_model.h5", compile=False)
 
-cap = cv2.VideoCapture(0) 
+cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+if not cap.isOpened():
+    cap = cv2.VideoCapture(0)
 if not cap.isOpened():
     raise SystemExit("Could not open lol son")
 
 print("webcam open, hit q to leave")
+fails = 0
+
+opened = False 
+class2_since = None 
+
 while True:
     ok, frame = cap.read()
-    if not ok: 
-        break 
+    if not ok:
+        # the Windows camera backend sometimes drops frames, esp. right
+        # after startup - retry instead of quitting
+        fails += 1
+        if fails > 100:
+            raise SystemExit("Webcam gives no frames - close any app using "
+                             "the camera (e.g. the Teachable Machine tab) and retry")
+        time.sleep(0.05)
+        continue
+    fails = 0
 
     h,w = frame.shape[:2]
     s = min(h,w)
-    crop = frame[(h - s) // 2:(h+s) // 2, (w + s) // 2]
-    imh = cv2.resize(crop, (224, 224))
+    crop = frame[(h - s) // 2:(h+s) // 2, (w - s) // 2:(w + s) // 2]
+    img = cv2.resize(crop, (224, 224))
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     x = img.astype(np.float32) / 127.5 - 1.0 
 
     probs = model.predict(x[None], verbose=0)[0]
     best = int(np.argmax(probs))
     text = f"{LABELS[best]}: {probs[best] * 100:.1f}%"
+
+    if best == 1 and probs[1] > 0.99:
+        if class2_since is None:
+            class2_since = time.time()
+        elif time.time() - class2_since >= 3 and not opened:
+            open_apple()
+            opened = True 
+    else:
+        class2_since = None
 
     cv2.putText(frame, text, (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0) if best == 0 else (0, 0, 255), 3)
     for i, (label, p) in enumerate(zip(LABELS, probs)):
